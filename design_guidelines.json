@@ -1,0 +1,102 @@
+{
+  "theme": "Light",
+  "archetype": "Archetype 4 (Swiss & High-Contrast)",
+  "vibe": "Objective, rigid, authoritative, minimal, 'Old Money Tech', function-first.",
+  "colors": {
+    "background": "#FAFAF9",
+    "surface": "#FFFFFF",
+    "border": "#E7E5E4",
+    "text_main": "#0C0A09",
+    "text_muted": "#78716C",
+    "primary_accent": "#002FA7",
+    "secondary_accent": "#FF2A00",
+    "tailwind_config_additions": {
+      "brand": {
+        "blue": "#002FA7",
+        "red": "#FF2A00",
+        "stone": {
+          "50": "#FAFAF9",
+          "200": "#E7E5E4",
+          "500": "#78716C",
+          "950": "#0C0A09"
+        }
+      }
+    }
+  },
+  "typography": {
+    "headings": {
+      "font": "Chivo",
+      "style": "tracking-tight, font-medium to font-black for radical weight contrast"
+    },
+    "body": {
+      "font": "IBM Plex Sans",
+      "style": "leading-relaxed, highly legible"
+    },
+    "data_and_numbers": {
+      "font": "IBM Plex Mono",
+      "style": "tracking-tighter for tables, metrics, and inventory codes"
+    }
+  },
+  "layout_and_spacing": {
+    "grid_strategy": "MODE B: THE 'CONTROL ROOM' GRID",
+    "spacing_scale": "Tight gaps (gap-4, gap-6) for dashboards, generous padding (p-6, p-8) inside cards to prevent collision.",
+    "borders": "1px solid border-stone-200. No heavy drop shadows. Crisp, flat, minimal.",
+    "border_radius": "rounded-none or max rounded-sm to maintain rigid, brutalist authority."
+  },
+  "components_strategy": {
+    "cards": "Flat background (bg-white), 1px subtle border (border-stone-200), no shadow. On hover, slight lift (-translate-y-1) and shadow-sm.",
+    "sidebar": "Thin, dense, monochrome background. Active states use left-border indicator in brand-blue.",
+    "tables": "border-collapse, bottom borders only, dense padding (py-2 px-3). Data aligns left. Use IBM Plex Mono for IDs, numbers, and dates.",
+    "kanban_pipeline": "Rigid 1px borders, stone-50 background for columns, white background for cards. Use Shadcn + a standard drag/drop library. Ensure columns stretch full height.",
+    "buttons": "brand-blue for primary action. Text must be white for contrast. Sharp corners.",
+    "charts": "Recharts with monochrome scales + brand-blue accents. No gradients on lines/bars."
+  },
+  "image_urls": [
+    {
+      "category": "user_avatars",
+      "description": "Portraits for CRM contacts and team members",
+      "urls": [
+        "https://images.unsplash.com/photo-1560250097-0b93528c311a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODh8MHwxfHNlYXJjaHwxfHxvZmZpY2UlMjB3b3JrZXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3Nzk3ODYxNDl8MA&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODh8MHwxfHNlYXJjaHwyfHxvZmZpY2UlMjB3b3JrZXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3Nzk3ODYxNDl8MA&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1675869940341-d495d49010b5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODh8MHwxfHNlYXJjaHw0fHxvZmZpY2UlMjB3b3JrZXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3Nzk3ODYxNDl8MA&ixlib=rb-4.1.0&q=85"
+      ]
+    },
+    {
+      "category": "inventory_items",
+      "description": "Images for ERP inventory items",
+      "urls": [
+        "https://images.unsplash.com/photo-1700165644892-3dd6b67b25bc?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NjV8MHwxfHNlYXJjaHwyfHxtaW5pbWFsJTIwd2FyZWhvdXNlJTIwYm94fGVufDB8fHx8MTc3OTc4NjE0OXww&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1556227996-370b60576b84?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NjV8MHwxfHNlYXJjaHwzfHxtaW5pbWFsJTIwd2FyZWhvdXNlJTIwYm94fGVufDB8fHx8MTc3OTc4NjE0OXww&ixlib=rb-4.1.0&q=85"
+      ]
+    },
+    {
+      "category": "tenant_logos",
+      "description": "Minimal geometry logos for multi-tenant switching",
+      "urls": [
+        "https://images.pexels.com/photos/28887852/pexels-photo-28887852.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "https://images.pexels.com/photos/35528865/pexels-photo-35528865.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+      ]
+    }
+  ],
+  "accessibility_and_testing": {
+    "contrast": "Ensure text meets APCA standards. Brand-blue (#002FA7) background must have white text.",
+    "hover_states": "ALWAYS explicitly set text color on hover. focus states must have HIGHER contrast.",
+    "testing_attributes": "All interactive and key informational elements MUST include data-testid attribute (kebab-case, role-based, e.g., data-testid='crm-pipeline-stage-column')."
+  },
+  "instructions_to_main_agent": {
+    "tech_stack": "React (Frontend) with Shadcn UI primitives, Nest.JS (Backend), Dockerfile at root.",
+    "file_extension_rule": "CRITICAL: The frontend is in Javascript. You MUST use .js and .jsx extensions for all React components. DO NOT USE .tsx or .ts files.",
+    "modules_to_build": [
+      "Multi-tenant layout with organization switcher in the header/sidebar.",
+      "RBAC middleware on Nest.JS and frontend protection based on roles (Admin, Manager, Sales, User).",
+      "CRM: Leads table, Contacts directory, Sales Pipeline (Kanban board with drag-drop).",
+      "ERP: Inventory list, Invoice generation view, Purchase Orders, Supplier Management.",
+      "Email automation view (bulk email interface).",
+      "Payment integration blueprint (Stripe-ready mock interface).",
+      "User settings and profile.",
+      "Analytics Dashboard (Recharts displaying key metrics)."
+    ],
+    "ui_library_commands": "npm install @heroicons/react recharts lucide-react",
+    "design_rules": "DO NOT USE Inter for headings. DO NOT USE soft rounded cards (no large border radius). Go brutalist, crisp, functional. Use rigid 1px borders."
+  }
+}
