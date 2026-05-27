@@ -1,51 +1,69 @@
-import { useEffect } from "react";
+import React from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { Toaster } from "sonner";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import LoginPage from "./pages/LoginPage";
+import RegisterPage from "./pages/RegisterPage";
+import DashboardLayout from "./components/layout/DashboardLayout";
+import Dashboard from "./pages/Dashboard";
+import LeadsPage from "./pages/crm/LeadsPage";
+import ContactsPage from "./pages/crm/ContactsPage";
+import PipelinePage from "./pages/crm/PipelinePage";
+import InventoryPage from "./pages/erp/InventoryPage";
+import InvoicesPage from "./pages/erp/InvoicesPage";
+import SuppliersPage from "./pages/erp/SuppliersPage";
+import PurchaseOrdersPage from "./pages/erp/PurchaseOrdersPage";
+import EmailCampaignsPage from "./pages/EmailCampaignsPage";
+import PaymentsPage from "./pages/PaymentsPage";
+import PaymentSuccessPage from "./pages/PaymentSuccessPage";
+import SettingsPage from "./pages/SettingsPage";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+const ProtectedRoute = ({ children }) => {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-50">
+        <div className="font-mono text-xs text-stone-500" data-testid="auth-loading">LOADING...</div>
+      </div>
+    );
+  }
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
+};
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
+const PublicOnly = ({ children }) => {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (user) return <Navigate to="/" replace />;
+  return children;
 };
 
 function App() {
   return (
-    <div className="App">
+    <div className="App font-body">
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
+        <AuthProvider>
+          <Toaster position="top-right" toastOptions={{ style: { borderRadius: '2px', border: '1px solid #E7E5E4' } }} />
+          <Routes>
+            <Route path="/login" element={<PublicOnly><LoginPage /></PublicOnly>} />
+            <Route path="/register" element={<PublicOnly><RegisterPage /></PublicOnly>} />
+            <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
+              <Route index element={<Dashboard />} />
+              <Route path="crm/leads" element={<LeadsPage />} />
+              <Route path="crm/contacts" element={<ContactsPage />} />
+              <Route path="crm/pipeline" element={<PipelinePage />} />
+              <Route path="erp/inventory" element={<InventoryPage />} />
+              <Route path="erp/invoices" element={<InvoicesPage />} />
+              <Route path="erp/suppliers" element={<SuppliersPage />} />
+              <Route path="erp/purchase-orders" element={<PurchaseOrdersPage />} />
+              <Route path="email" element={<EmailCampaignsPage />} />
+              <Route path="payments" element={<PaymentsPage />} />
+              <Route path="payments/success" element={<PaymentSuccessPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+            </Route>
+          </Routes>
+        </AuthProvider>
       </BrowserRouter>
     </div>
   );

@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: erp-crm-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - erp-crm-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: erp-crm-backend
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+    environment:
+      MONGO_URL: "mongodb://mongodb:27017"
+      DB_NAME: "${DB_NAME:-erp_crm_prod}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+      JWT_SECRET: "${JWT_SECRET:-change-me-in-production}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-admin@erp-crm.com}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-admin123}"
+      STRIPE_API_KEY: "${STRIPE_API_KEY:-sk_test_emergent}"
+    ports:
+      - "8001:8001"
+    networks:
+      - erp-crm-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_BACKEND_URL: "${REACT_APP_BACKEND_URL:-http://localhost:8001}"
+    container_name: erp-crm-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    networks:
+      - erp-crm-net
+
+volumes:
+  mongo_data:
+
+networks:
+  erp-crm-net:
+    driver: bridge
