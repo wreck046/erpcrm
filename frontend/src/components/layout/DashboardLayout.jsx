@@ -16,6 +16,7 @@ import {
   LogOut,
   ChevronRight,
   Menu,
+  UsersRound,
 } from "lucide-react";
 
 const NavGroup = ({ label, children }) => (
@@ -128,6 +129,7 @@ export default function DashboardLayout() {
 
           <NavGroup label="Operations">
             <NavItem to="/email" icon={Mail} label="Email Campaigns" testId="nav-email" />
+            <NavItem to="/users" icon={UsersRound} label="Team & Roles" testId="nav-users" />
             <NavItem to="/payments" icon={CreditCard} label="Payments" testId="nav-payments" />
             <NavItem to="/settings" icon={Settings} label="Settings" testId="nav-settings" />
           </NavGroup>

@@ -12,6 +12,9 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
+import asyncio
+import secrets
+import resend
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -32,6 +35,13 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
 # Stripe Configuration
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', 'sk_test_emergent')
+
+# Resend Email Configuration
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev')
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
 
 # ============= RATE LIMITING (THROTTLING) =============
 def get_user_id_or_ip(request: Request) -> str:
@@ -111,6 +121,61 @@ def require_role(allowed_roles: List[str]):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return user
     return role_checker
+
+# ============= ATOMIC COUNTERS (race-safe) =============
+async def next_sequence(name: str, organization_id: str) -> int:
+    """Atomically increment a per-tenant counter and return the new value."""
+    key = f"{organization_id}:{name}"
+    result = await db.counters.find_one_and_update(
+        {"_id": key},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    return result["seq"]
+
+# ============= EMAIL SERVICE (Resend) =============
+async def send_email(to: str, subject: str, html: str) -> Optional[str]:
+    """Send transactional email via Resend. Returns email_id or None on failure."""
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not configured - email not sent to %s", to)
+        return None
+    params = {"from": SENDER_EMAIL, "to": [to], "subject": subject, "html": html}
+    try:
+        result = await asyncio.to_thread(resend.Emails.send, params)
+        return result.get("id") if isinstance(result, dict) else None
+    except Exception as e:
+        logger.error("Resend send failed: %s", e)
+        return None
+
+def invite_email_html(inviter_name: str, organization_name: str, role: str, invite_link: str) -> str:
+    return f"""
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#FAFAF9;padding:40px 0;font-family:Helvetica,Arial,sans-serif;">
+  <tr><td align="center">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560" style="background:#ffffff;border:1px solid #E7E5E4;">
+      <tr><td style="padding:32px 40px;border-bottom:1px solid #E7E5E4;">
+        <div style="font-size:11px;letter-spacing:2px;color:#78716C;text-transform:uppercase;font-family:monospace;">ENTERPRISE OS / INVITATION</div>
+        <h1 style="font-size:28px;letter-spacing:-0.02em;color:#0C0A09;margin:8px 0 0 0;font-weight:900;">You're invited.</h1>
+      </td></tr>
+      <tr><td style="padding:32px 40px;">
+        <p style="font-size:14px;color:#44403C;line-height:1.6;margin:0 0 16px 0;">
+          <strong>{inviter_name}</strong> invited you to join <strong>{organization_name}</strong> on Enterprise OS as <strong style="color:#002FA7;text-transform:uppercase;font-family:monospace;font-size:12px;letter-spacing:1px;">{role}</strong>.
+        </p>
+        <p style="font-size:14px;color:#44403C;line-height:1.6;margin:0 0 32px 0;">
+          Click the button below to accept and set up your account. This link expires in 7 days.
+        </p>
+        <a href="{invite_link}" style="display:inline-block;background:#002FA7;color:#ffffff;padding:14px 28px;text-decoration:none;font-size:14px;font-weight:500;letter-spacing:0.5px;">Accept Invitation →</a>
+        <p style="font-size:11px;color:#78716C;line-height:1.6;margin:32px 0 0 0;font-family:monospace;">
+          Or paste this URL: <br/>{invite_link}
+        </p>
+      </td></tr>
+      <tr><td style="padding:20px 40px;border-top:1px solid #E7E5E4;background:#FAFAF9;">
+        <div style="font-size:10px;letter-spacing:2px;color:#A8A29E;text-transform:uppercase;font-family:monospace;">Enterprise OS · ERP × CRM</div>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+"""
 
 # ============= MODELS =============
 class OrganizationCreate(BaseModel):
@@ -330,6 +395,48 @@ class DashboardStats(BaseModel):
     pending_invoices: int
     pending_pos: int
 
+# ============= USER INVITE MODELS =============
+class UserInviteCreate(BaseModel):
+    email: EmailStr
+    name: str
+    role: str  # admin | manager | sales | user
+    mode: str = "invite"  # "invite" (email link) or "direct" (set temp password)
+    temp_password: Optional[str] = None  # required if mode=direct
+
+class UserInviteAccept(BaseModel):
+    token: str
+    password: str
+
+class UserRoleUpdate(BaseModel):
+    role: str
+
+class TenantUser(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    email: str
+    name: str
+    role: str
+    status: str  # active | pending
+    created_at: datetime
+
+class InviteInfo(BaseModel):
+    email: str
+    name: str
+    role: str
+    organization_name: str
+    inviter_name: str
+    expires_at: datetime
+
+VALID_ROLES = ["admin", "manager", "sales", "user"]
+
+def assignable_roles(actor_role: str) -> List[str]:
+    """Manager can only assign sales/user. Admin can assign all roles."""
+    if actor_role == "admin":
+        return VALID_ROLES
+    if actor_role == "manager":
+        return ["sales", "user"]
+    return []
+
 # ============= ADMIN SEEDING =============
 async def seed_admin():
     admin_email = os.environ.get('ADMIN_EMAIL', 'admin@erp-crm.com')
@@ -530,6 +637,224 @@ async def get_dashboard_stats(user: dict = Depends(get_current_user)):
         pending_pos=pending_pos
     )
 
+# ============= USER INVITE / MANAGEMENT ROUTES =============
+@api_router.get("/users", response_model=List[TenantUser])
+async def list_tenant_users(user: dict = Depends(get_current_user)):
+    """List all users in current tenant. Any authenticated user can view."""
+    users = await db.users.find({"organization_id": user["organization_id"]}).to_list(1000)
+    out = []
+    for u in users:
+        out.append({
+            "id": str(u["_id"]),
+            "email": u["email"],
+            "name": u["name"],
+            "role": u["role"],
+            "status": u.get("status", "active"),
+            "created_at": u["created_at"],
+        })
+    return out
+
+@api_router.post("/users/invite", response_model=TenantUser)
+@limiter.limit("30/minute")
+async def invite_user(request: Request, payload: UserInviteCreate, user: dict = Depends(get_current_user)):
+    """Admin/Manager can invite. Manager can only assign sales/user roles."""
+    if user["role"] not in ["admin", "manager"]:
+        raise HTTPException(status_code=403, detail="Only admin or manager can invite users")
+
+    role = payload.role.lower()
+    if role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {VALID_ROLES}")
+
+    allowed = assignable_roles(user["role"])
+    if role not in allowed:
+        raise HTTPException(status_code=403, detail=f"Your role ({user['role']}) cannot assign '{role}'. Allowed: {allowed}")
+
+    email = payload.email.lower()
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    org = await db.organizations.find_one({"_id": ObjectId(user["organization_id"])})
+    org_name = org["name"] if org else "Your Organization"
+
+    if payload.mode == "direct":
+        if not payload.temp_password or len(payload.temp_password) < 6:
+            raise HTTPException(status_code=400, detail="Temp password must be at least 6 characters")
+        user_doc = {
+            "email": email,
+            "password_hash": hash_password(payload.temp_password),
+            "name": payload.name,
+            "role": role,
+            "organization_id": user["organization_id"],
+            "status": "active",
+            "created_at": datetime.now(timezone.utc),
+        }
+        result = await db.users.insert_one(user_doc)
+        return {
+            "id": str(result.inserted_id),
+            "email": email,
+            "name": payload.name,
+            "role": role,
+            "status": "active",
+            "created_at": user_doc["created_at"],
+        }
+
+    # mode == "invite" - create pending user and send invite email
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    user_doc = {
+        "email": email,
+        "password_hash": "",  # set when invite is accepted
+        "name": payload.name,
+        "role": role,
+        "organization_id": user["organization_id"],
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc),
+    }
+    result = await db.users.insert_one(user_doc)
+    user_id = str(result.inserted_id)
+
+    await db.invitations.insert_one({
+        "token": token,
+        "user_id": user_id,
+        "email": email,
+        "organization_id": user["organization_id"],
+        "expires_at": expires_at,
+        "used": False,
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    invite_link = f"{FRONTEND_URL}/accept-invite?token={token}"
+    html = invite_email_html(user["name"], org_name, role, invite_link)
+    email_id = await send_email(email, f"You're invited to {org_name}", html)
+    logger.info("Invite sent to %s (resend_id=%s)", email, email_id)
+
+    return {
+        "id": user_id,
+        "email": email,
+        "name": payload.name,
+        "role": role,
+        "status": "pending",
+        "created_at": user_doc["created_at"],
+    }
+
+@api_router.get("/users/invitations/{token}", response_model=InviteInfo)
+async def get_invitation(token: str):
+    """Public endpoint - get invitation details for accept-invite page."""
+    inv = await db.invitations.find_one({"token": token, "used": False})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invitation not found or already used")
+    expires_at = inv["expires_at"]
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Invitation expired")
+    user_doc = await db.users.find_one({"_id": ObjectId(inv["user_id"])})
+    org_doc = await db.organizations.find_one({"_id": ObjectId(inv["organization_id"])})
+    if not user_doc or not org_doc:
+        raise HTTPException(status_code=404, detail="Invitation invalid")
+    return {
+        "email": user_doc["email"],
+        "name": user_doc["name"],
+        "role": user_doc["role"],
+        "organization_name": org_doc["name"],
+        "inviter_name": "Your team",
+        "expires_at": inv["expires_at"],
+    }
+
+@api_router.post("/users/invitations/accept", response_model=User)
+@limiter.limit("10/minute")
+async def accept_invitation(request: Request, payload: UserInviteAccept, response: Response):
+    """Accept invitation - set password and activate user, return JWT cookie."""
+    inv = await db.invitations.find_one({"token": payload.token, "used": False})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invitation not found or already used")
+    expires_at = inv["expires_at"]
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Invitation expired")
+
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    user_doc = await db.users.find_one({"_id": ObjectId(inv["user_id"])})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    await db.users.update_one(
+        {"_id": ObjectId(inv["user_id"])},
+        {"$set": {"password_hash": hash_password(payload.password), "status": "active"}}
+    )
+    await db.invitations.update_one({"token": payload.token}, {"$set": {"used": True}})
+
+    token = create_access_token(
+        str(user_doc["_id"]),
+        user_doc["email"],
+        user_doc["organization_id"],
+        user_doc["role"]
+    )
+    response.set_cookie(
+        key="access_token", value=token, httponly=True, secure=False, samesite="lax",
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60, path="/"
+    )
+    return User(
+        id=str(user_doc["_id"]),
+        email=user_doc["email"],
+        name=user_doc["name"],
+        role=user_doc["role"],
+        organization_id=user_doc["organization_id"],
+        created_at=user_doc["created_at"]
+    )
+
+@api_router.patch("/users/{user_id}/role", response_model=TenantUser)
+@limiter.limit("30/minute")
+async def update_user_role(request: Request, user_id: str, payload: UserRoleUpdate, user: dict = Depends(get_current_user)):
+    """Admin/Manager can update roles. Manager can only set sales/user."""
+    if user["role"] not in ["admin", "manager"]:
+        raise HTTPException(status_code=403, detail="Only admin or manager can update roles")
+    new_role = payload.role.lower()
+    if new_role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"Invalid role")
+    if new_role not in assignable_roles(user["role"]):
+        raise HTTPException(status_code=403, detail=f"Your role cannot assign '{new_role}'")
+    if user_id == user["id"]:
+        raise HTTPException(status_code=400, detail="Cannot change your own role")
+
+    target = await db.users.find_one({"_id": ObjectId(user_id), "organization_id": user["organization_id"]})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found in your tenant")
+
+    # Prevent manager from demoting an admin
+    if user["role"] == "manager" and target["role"] == "admin":
+        raise HTTPException(status_code=403, detail="Managers cannot modify admin users")
+
+    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"role": new_role}})
+    target["role"] = new_role
+    return {
+        "id": str(target["_id"]),
+        "email": target["email"],
+        "name": target["name"],
+        "role": target["role"],
+        "status": target.get("status", "active"),
+        "created_at": target["created_at"],
+    }
+
+@api_router.delete("/users/{user_id}")
+@limiter.limit("30/minute")
+async def remove_user(request: Request, user_id: str, user: dict = Depends(get_current_user)):
+    """Admin only - remove a user from the tenant."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can remove users")
+    if user_id == user["id"]:
+        raise HTTPException(status_code=400, detail="Cannot remove yourself")
+    result = await db.users.delete_one({"_id": ObjectId(user_id), "organization_id": user["organization_id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found in your tenant")
+    # Clean up any pending invitations
+    await db.invitations.delete_many({"user_id": user_id})
+    return {"status": "removed"}
+
 # ============= CRM ROUTES - LEADS =============
 @api_router.post("/crm/leads", response_model=Lead)
 @limiter.limit("60/minute")
@@ -630,9 +955,9 @@ async def create_invoice(request: Request, invoice_data: InvoiceCreate, user: di
     tax = subtotal * 0.1  # 10% tax
     total = subtotal + tax
     
-    # Generate invoice number
-    count = await db.invoices.count_documents({"organization_id": user["organization_id"]})
-    invoice_number = f"INV-{count + 1:05d}"
+    # Generate atomic invoice number (race-safe)
+    seq = await next_sequence("invoice", user["organization_id"])
+    invoice_number = f"INV-{seq:05d}"
     
     invoice_doc = invoice_data.model_dump()
     invoice_doc["invoice_number"] = invoice_number
@@ -680,8 +1005,8 @@ async def create_purchase_order(request: Request, po_data: PurchaseOrderCreate, 
     tax = subtotal * 0.1
     total = subtotal + tax
     
-    count = await db.purchase_orders.count_documents({"organization_id": user["organization_id"]})
-    po_number = f"PO-{count + 1:05d}"
+    seq = await next_sequence("po", user["organization_id"])
+    po_number = f"PO-{seq:05d}"
     
     po_doc = po_data.model_dump()
     po_doc["po_number"] = po_number

@@ -288,3 +288,260 @@ class TestThrottling:
             statuses.append(r.status_code)
         # First 5 should succeed (200) or fail due to stripe; 6th+ must be 429
         assert 429 in statuses, f"Expected 429 in statuses, got {statuses}"
+
+
+
+# ============== User Invite System ==============
+class TestUserInvite:
+    def test_list_users_admin_sees_self(self, admin_session):
+        r = admin_session.get(f"{API}/users")
+        assert r.status_code == 200, r.text
+        users = r.json()
+        assert any(u["email"] == ADMIN_EMAIL for u in users)
+        for u in users:
+            assert "role" in u and "status" in u and "id" in u
+
+    def test_invite_direct_admin_creates_manager(self, admin_session):
+        unique = uuid.uuid4().hex[:8]
+        payload = {
+            "email": f"TEST_mgr_{unique}@example.com",
+            "name": "TEST Manager",
+            "role": "manager",
+            "mode": "direct",
+            "temp_password": "tempPass123"
+        }
+        r = admin_session.post(f"{API}/users/invite", json=payload)
+        assert r.status_code == 200, r.text
+        user = r.json()
+        assert user["status"] == "active"
+        assert user["role"] == "manager"
+        assert user["email"] == payload["email"].lower()
+        # Verify created user can login with temp password
+        s2 = requests.Session()
+        r2 = s2.post(f"{API}/auth/login", json={"email": payload["email"], "password": "tempPass123"})
+        assert r2.status_code == 200
+
+    def test_invite_direct_missing_temp_password(self, admin_session):
+        unique = uuid.uuid4().hex[:8]
+        r = admin_session.post(f"{API}/users/invite", json={
+            "email": f"TEST_x_{unique}@example.com",
+            "name": "X", "role": "user", "mode": "direct"
+        })
+        assert r.status_code == 400
+
+    def test_invite_invalid_role(self, admin_session):
+        unique = uuid.uuid4().hex[:8]
+        r = admin_session.post(f"{API}/users/invite", json={
+            "email": f"TEST_inv_{unique}@example.com",
+            "name": "X", "role": "superuser", "mode": "direct", "temp_password": "abcdef"
+        })
+        assert r.status_code == 400
+
+    def test_manager_can_invite_sales_user_but_not_admin_manager(self, admin_session):
+        unique = uuid.uuid4().hex[:8]
+        # Create a manager via admin
+        mgr_email = f"TEST_mgr2_{unique}@example.com"
+        r = admin_session.post(f"{API}/users/invite", json={
+            "email": mgr_email, "name": "Mgr2", "role": "manager",
+            "mode": "direct", "temp_password": "mgrPass123"
+        })
+        assert r.status_code == 200
+        # Login as that manager
+        ms = requests.Session()
+        rl = ms.post(f"{API}/auth/login", json={"email": mgr_email, "password": "mgrPass123"})
+        assert rl.status_code == 200
+        # Manager can invite a sales user
+        r1 = ms.post(f"{API}/users/invite", json={
+            "email": f"TEST_sales_{unique}@example.com", "name": "Sales", "role": "sales",
+            "mode": "direct", "temp_password": "salesPass123"
+        })
+        assert r1.status_code == 200, r1.text
+        assert r1.json()["role"] == "sales"
+        # Manager CANNOT invite admin
+        r2 = ms.post(f"{API}/users/invite", json={
+            "email": f"TEST_admin_{unique}@example.com", "name": "AdminX", "role": "admin",
+            "mode": "direct", "temp_password": "adminPass123"
+        })
+        assert r2.status_code == 403, r2.text
+        # Manager CANNOT invite manager
+        r3 = ms.post(f"{API}/users/invite", json={
+            "email": f"TEST_mgrX_{unique}@example.com", "name": "MgrX", "role": "manager",
+            "mode": "direct", "temp_password": "mgrPass123"
+        })
+        assert r3.status_code == 403
+
+    def test_invite_email_mode_creates_pending_and_token(self, admin_session):
+        unique = uuid.uuid4().hex[:8]
+        email = f"TEST_inv_{unique}@example.com".lower()
+        r = admin_session.post(f"{API}/users/invite", json={
+            "email": email, "name": "Pending User", "role": "user", "mode": "invite"
+        })
+        assert r.status_code == 200, r.text
+        u = r.json()
+        assert u["status"] == "pending"
+        # Verify user shows in list as pending
+        rl = admin_session.get(f"{API}/users")
+        match = next((x for x in rl.json() if x["email"] == email), None)
+        assert match and match["status"] == "pending"
+
+    def test_invite_accept_flow_end_to_end(self, admin_session):
+        """Create invite, fetch token via /users list+invitations collection workaround,
+        then test get_invitation + accept by extracting token from the second invite call.
+        We'll use the admin endpoint to verify by trying invalid token first."""
+        # invalid token GET
+        r = requests.get(f"{API}/users/invitations/NOT_A_REAL_TOKEN")
+        assert r.status_code == 404
+        # invalid token ACCEPT
+        r2 = requests.post(f"{API}/users/invitations/accept", json={
+            "token": "NOT_A_REAL_TOKEN", "password": "newpass123"
+        })
+        assert r2.status_code == 404
+
+    def test_invite_accept_with_real_token(self, admin_session):
+        """Pull a token directly from MongoDB to test the accept flow."""
+        import pymongo
+        unique = uuid.uuid4().hex[:8]
+        email = f"TEST_accept_{unique}@example.com".lower()
+        r = admin_session.post(f"{API}/users/invite", json={
+            "email": email, "name": "Acceptor", "role": "user", "mode": "invite"
+        })
+        assert r.status_code == 200
+        # Read token from MongoDB
+        mc = pymongo.MongoClient(os.environ.get("MONGO_URL", "mongodb://localhost:27017"))
+        dbname = os.environ.get("DB_NAME", "test_database")
+        # try common db names
+        for candidate in [dbname, "test_database"]:
+            inv = mc[candidate].invitations.find_one({"email": email, "used": False})
+            if inv:
+                break
+        assert inv, "Invitation not found in DB"
+        token = inv["token"]
+        # GET invitation info
+        rg = requests.get(f"{API}/users/invitations/{token}")
+        assert rg.status_code == 200, rg.text
+        info = rg.json()
+        assert info["email"] == email
+        assert info["role"] == "user"
+        assert info["organization_name"]
+        # Accept invitation
+        s = requests.Session()
+        ra = s.post(f"{API}/users/invitations/accept", json={"token": token, "password": "newPass789"})
+        assert ra.status_code == 200, ra.text
+        u = ra.json()
+        assert u["email"] == email
+        assert s.cookies.get("access_token")
+        # Token cannot be re-used
+        rr = requests.post(f"{API}/users/invitations/accept", json={"token": token, "password": "newPass789"})
+        assert rr.status_code == 404
+        # Logged-in via cookie, /me works
+        rme = s.get(f"{API}/auth/me")
+        assert rme.status_code == 200
+
+    def test_update_role_admin(self, admin_session):
+        # Create a sales user
+        unique = uuid.uuid4().hex[:8]
+        email = f"TEST_role_{unique}@example.com"
+        r = admin_session.post(f"{API}/users/invite", json={
+            "email": email, "name": "RoleTest", "role": "sales",
+            "mode": "direct", "temp_password": "salesPass"
+        })
+        uid = r.json()["id"]
+        # admin changes role to manager
+        r2 = admin_session.patch(f"{API}/users/{uid}/role", json={"role": "manager"})
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["role"] == "manager"
+        # invalid role
+        r3 = admin_session.patch(f"{API}/users/{uid}/role", json={"role": "godmode"})
+        assert r3.status_code == 400
+
+    def test_update_role_self_blocked(self, admin_session):
+        me = admin_session.get(f"{API}/auth/me").json()
+        r = admin_session.patch(f"{API}/users/{me['id']}/role", json={"role": "manager"})
+        assert r.status_code == 400
+
+    def test_delete_user_admin_only(self, admin_session):
+        unique = uuid.uuid4().hex[:8]
+        r = admin_session.post(f"{API}/users/invite", json={
+            "email": f"TEST_del_{unique}@example.com", "name": "ToDelete",
+            "role": "user", "mode": "direct", "temp_password": "delpass123"
+        })
+        uid = r.json()["id"]
+        rd = admin_session.delete(f"{API}/users/{uid}")
+        assert rd.status_code == 200
+        # Confirm not in user list
+        rl = admin_session.get(f"{API}/users")
+        assert not any(u["id"] == uid for u in rl.json())
+
+    def test_delete_self_blocked(self, admin_session):
+        me = admin_session.get(f"{API}/auth/me").json()
+        r = admin_session.delete(f"{API}/users/{me['id']}")
+        assert r.status_code == 400
+
+    def test_non_admin_cannot_delete(self, admin_session):
+        unique = uuid.uuid4().hex[:8]
+        mgr_email = f"TEST_mgrdel_{unique}@example.com"
+        admin_session.post(f"{API}/users/invite", json={
+            "email": mgr_email, "name": "Mgr", "role": "manager",
+            "mode": "direct", "temp_password": "mgrPass"
+        })
+        ms = requests.Session()
+        ms.post(f"{API}/auth/login", json={"email": mgr_email, "password": "mgrPass"})
+        # try to delete admin user
+        me = admin_session.get(f"{API}/auth/me").json()
+        r = ms.delete(f"{API}/users/{me['id']}")
+        assert r.status_code == 403
+
+
+# ============== Atomic Counters ==============
+class TestAtomicCounters:
+    def test_invoice_numbers_sequential(self, admin_session):
+        items = [{"description": "X", "quantity": 1, "unit_price": 10, "total": 10}]
+        nums = []
+        for _ in range(3):
+            r = admin_session.post(f"{API}/erp/invoices", json={
+                "client_name": "TEST_Seq", "client_email": "x@y.com", "items": items
+            })
+            assert r.status_code == 200, r.text
+            nums.append(r.json()["invoice_number"])
+        # extract numeric suffixes
+        seqs = [int(n.split("-")[1]) for n in nums]
+        assert seqs[1] == seqs[0] + 1, f"Not sequential: {nums}"
+        assert seqs[2] == seqs[1] + 1, f"Not sequential: {nums}"
+        # No duplicates
+        assert len(set(nums)) == 3
+
+    def test_po_numbers_sequential(self, admin_session):
+        # create a supplier
+        sr = admin_session.post(f"{API}/erp/suppliers", json={
+            "name": "TEST_SeqSup", "email": f"sq_{uuid.uuid4().hex[:6]}@x.com"
+        })
+        sid = sr.json()["id"]
+        items = [{"description": "P", "quantity": 1, "unit_price": 50, "total": 50}]
+        nums = []
+        for _ in range(3):
+            r = admin_session.post(f"{API}/erp/purchase-orders", json={
+                "supplier_id": sid, "items": items
+            })
+            assert r.status_code == 200, r.text
+            nums.append(r.json()["po_number"])
+        seqs = [int(n.split("-")[1]) for n in nums]
+        assert seqs[1] == seqs[0] + 1, f"PO not sequential: {nums}"
+        assert seqs[2] == seqs[1] + 1, f"PO not sequential: {nums}"
+        assert len(set(nums)) == 3
+
+    def test_counter_per_tenant_starts_at_one(self):
+        """A brand-new tenant should start at INV-00001."""
+        s = requests.Session()
+        unique = uuid.uuid4().hex[:8]
+        rr = s.post(f"{API}/auth/register", json={
+            "email": f"newtenant_{unique}@example.com",
+            "password": "passw0rd!",
+            "name": "NT", "organization_name": f"NT_{unique}"
+        })
+        assert rr.status_code == 200
+        items = [{"description": "A", "quantity": 1, "unit_price": 5, "total": 5}]
+        r = s.post(f"{API}/erp/invoices", json={
+            "client_name": "C", "client_email": "c@c.com", "items": items
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["invoice_number"] == "INV-00001", r.json()["invoice_number"]

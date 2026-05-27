@@ -1,0 +1,40 @@
+{
+  "summary": "Iteration 2 testing focused on the 3 new features: (1) user invite system (direct + email modes, RBAC for admin/manager), (2) Resend email integration, (3) atomic invoice/PO counters. Extended backend_test.py from 19 to 35 tests, all passing. Found and fixed 1 critical bug in GET /api/users/invitations/{token} - a Python operator-precedence bug in the expiry check that caused EVERY invitation token to be rejected as 'expired', completely blocking the accept-invite frontend flow. Frontend testing verified: Users page, Invite User modal (mode toggle hides/shows temp_password field), direct create user appears in table, /accept-invite shows 'Invalid Invitation' error for bad tokens, Team & Roles nav present under Operations sidebar, inline role selectors render per user.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/users/invitations/{token}", "issue": "FIXED. Operator-precedence bug at server.py:747 caused all invitations to return 410 'Invitation expired' because the ternary was evaluated before the outer if (datetime object is truthy). Replaced with explicit tz normalization. All invite-accept flows now work end-to-end.", "priority": "CRITICAL"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard", "issues": ["Recharts ResponsiveContainer logs width(-1)/height(-1) warning on first paint (carried over from iteration 1, non-blocking)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py grew to ~1145 lines and now includes user invite/management routes too. Split into routers/ (auth, users, crm, erp, payments, email) is strongly recommended before adding more modules.",
+    "send_email uses asyncio.to_thread on a sync Resend client - acceptable but a background task would be more robust for invite flows (currently the API call waits on email send, which can stall response by 100-300ms).",
+    "invite_user (mode=invite) creates the pending user FIRST, then sends email. If Resend rejects (e.g., sandbox-mode email blocked), the user still exists in pending status. This is intentional per agent-context note (token is stored even if email fails) but worth documenting in API responses (e.g., return {warning: 'email_blocked'}).",
+    "accept_invitation doesn't re-validate that user.status is 'pending' before activating. Edge case: if admin pre-creates a 'direct' active user with the same email after sending an invite, the email index would block this anyway, so currently safe — but defensive check is cheap.",
+    "Cookie `secure=False` still set on accept_invitation (line 795) — consistent with login/register, fine for preview, must be env-driven for prod.",
+    "VALID_ROLES uses ['admin','manager','sales','user'] but there is no enum / DB constraint; relies purely on the API check. OK for blueprint."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (fixed invitation expiry operator-precedence bug at line 747)",
+    "/app/backend/tests/backend_test.py (added TestUserInvite with 13 cases + TestAtomicCounters with 3 cases — total 35 tests)"
+  ],
+  "success_rate": {"backend": "100% (35/35)", "frontend": "100%"},
+  "test_credentials": "admin@erp-crm.com / admin123 (verified). Frontend test created a sales user via direct mode with tempPass123 (TEST_-prefixed; cleanup not done — count of users in tenant has grown).",
+  "seed_data_creation": "Each test run creates multiple TEST_-prefixed users (managers, sales, pending invites) plus invoices/POs. Default-tenant invoice counter has advanced. Brand-new tenants registered per isolation/counter tests still start at INV-00001 (per-tenant counter verified).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend test file: /app/backend/tests/backend_test.py with classes TestAuth, TestDashboard, TestCRM, TestERP, TestEmail, TestMultiTenant, TestThrottling, TestUserInvite, TestAtomicCounters. Run: pytest /app/backend/tests/backend_test.py -v. TestUserInvite::test_invite_accept_with_real_token reads the invitation token directly from MongoDB via pymongo (since Resend sandbox blocks delivery to non-account emails). Earlier iteration's invitation-expiry bug was fixed in server.py line 747. Counter format in MongoDB: counters collection with _id = '{organization_id}:invoice' or '{organization_id}:po'.",
+  "rca of the issue": "GET /api/users/invitations/{token} bug RCA: The expiry check was written as `if inv['expires_at'].replace(tzinfo=timezone.utc) if inv['expires_at'].tzinfo is None else inv['expires_at'] < datetime.now(timezone.utc):`. Python operator precedence binds the ternary tighter than the outer `if`, so it evaluates to: `if (datetime_obj if tzinfo_is_none else bool):`. Motor returns naive datetimes (tzinfo=None) so the ternary always returned the datetime object — a truthy value — making the outer `if` always True, always raising 410. Reproduction: create invite, GET /api/users/invitations/{token} → 410 even for fresh tokens. Fix: extract expiry into a variable, normalize tz first, then compare. Verified: TestUserInvite::test_invite_accept_with_real_token now passes; frontend AcceptInvitePage will now correctly fetch and accept real invitations."
+}

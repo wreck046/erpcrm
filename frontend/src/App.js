@@ -18,6 +18,8 @@ import EmailCampaignsPage from "./pages/EmailCampaignsPage";
 import PaymentsPage from "./pages/PaymentsPage";
 import PaymentSuccessPage from "./pages/PaymentSuccessPage";
 import SettingsPage from "./pages/SettingsPage";
+import UsersPage from "./pages/UsersPage";
+import AcceptInvitePage from "./pages/AcceptInvitePage";
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -48,6 +50,7 @@ function App() {
           <Routes>
             <Route path="/login" element={<PublicOnly><LoginPage /></PublicOnly>} />
             <Route path="/register" element={<PublicOnly><RegisterPage /></PublicOnly>} />
+            <Route path="/accept-invite" element={<AcceptInvitePage />} />
             <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
               <Route index element={<Dashboard />} />
               <Route path="crm/leads" element={<LeadsPage />} />
@@ -58,6 +61,7 @@ function App() {
               <Route path="erp/suppliers" element={<SuppliersPage />} />
               <Route path="erp/purchase-orders" element={<PurchaseOrdersPage />} />
               <Route path="email" element={<EmailCampaignsPage />} />
+              <Route path="users" element={<UsersPage />} />
               <Route path="payments" element={<PaymentsPage />} />
               <Route path="payments/success" element={<PaymentSuccessPage />} />
               <Route path="settings" element={<SettingsPage />} />
