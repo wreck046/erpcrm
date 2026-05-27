@@ -1,56 +1,39 @@
 # Enterprise OS - ERP & CRM Blueprint
 
 ## Original Problem Statement
-Build a general ERP and CRM blueprint application using React (frontend) and Nest.JS (backend) - **switched to FastAPI per environment constraints**. Must include a Dockerfile so the app can be deployed across numerous images.
+Build a general ERP and CRM blueprint application using React + FastAPI (originally requested Nest.JS/Golang, switched to FastAPI). Multi-tenant + RBAC. Both CRM + ERP. Email automation + payment blueprints. Docker with locked Python.
 
-## User Choices Captured
-- Backend: FastAPI (Python 3.11) - locked Python env in Dockerfile
-- Modules: Both CRM + ERP integrated
-- User Management: Multi-tenant support with RBAC (Admin, Manager, Sales, User)
-- Design: Minimal/clean interface (Swiss & High-Contrast archetype)
-- Integrations: Email automation blueprint, Stripe payment blueprint
-- **Throttling**: All write operations, per-user limits, custom rate values
+## Implementation Log
 
-## Architecture
-- **Frontend**: React 19 + Tailwind + shadcn/ui + dnd-kit + recharts
-- **Backend**: FastAPI + Motor (async MongoDB) + JWT (HTTPOnly cookies) + bcrypt + slowapi
-- **Database**: MongoDB 7
-- **Deployment**: Docker (Python 3.11.15 locked) + docker-compose
+### Iteration 1 (2026-05-27)
+- Multi-tenant auth (JWT cookies + bcrypt), admin seeding
+- CRM: leads, contacts, deals + drag-drop pipeline (dnd-kit)
+- ERP: inventory, invoices (10% tax), suppliers, purchase orders
+- Email campaigns (draft blueprint)
+- Stripe payment integration (5 plans, polling success flow)
+- slowapi throttling: payments 5/min, inv/po 20/min, general 60/min, auth 10/min
+- Dockerfile (Python 3.11.15 locked) + docker-compose
+- Result: 19/19 backend tests passing
 
-## Implemented (2026-05-27)
-### Backend
-- Multi-tenant authentication (JWT cookies, bcrypt, admin seeding)
-- CRM endpoints: leads, contacts, deals, pipeline stages (drag-drop move)
-- ERP endpoints: inventory, invoices (auto-numbered), suppliers, purchase orders
-- Email campaigns (draft blueprint, SendGrid/Resend ready)
-- Payment integration via emergentintegrations StripeCheckout
-- Rate limiting (slowapi): Payments 5/min, Inv/PO 20/min, general writes 60/min, auth 10/min
-- Dashboard aggregated stats endpoint
-
-### Frontend
-- Brutalist Swiss design (Chivo + IBM Plex Sans + Mono)
-- Auth flows (login/register) with demo credentials
-- Sidebar layout with org switcher + breadcrumbs
-- Dashboard with KPI cards + revenue chart
-- All CRUD pages for CRM + ERP modules
-- Drag-and-drop Kanban pipeline (dnd-kit)
-- Stripe payment packages page with polling success flow
-- Global 429 toast handler for throttle responses
-- Settings page showing security + throttle config
-
-### DevOps
-- Backend Dockerfile (python:3.11.15-slim locked)
-- Frontend Dockerfile (multi-stage with nginx)
-- docker-compose.yml (mongo + backend + frontend)
-- nginx config for SPA routing
+### Iteration 2 (2026-05-27)
+- **User invite system**: admin/manager can invite, manager limited to sales/user roles
+  - Two modes: email invite (Resend) OR direct create with temp password
+  - PATCH /users/{id}/role for role updates, DELETE /users/{id} (admin only)
+  - Accept-invite public page with token verification
+- **Resend email integration**: real API with key, HTML invitation emails
+  - Testing mode: only delivers to ivankoroh46@gmail.com (Resend signup), token still saved for manual share
+- **Atomic invoice/PO sequences**: MongoDB counters collection with findOneAndUpdate $inc
+  - Per-tenant scoped (key: '{org_id}:invoice')
+  - Race-safe for concurrent POSTs
+- Critical bug fixed: invitation expiry operator-precedence (testing agent caught it)
+- Result: 35/35 backend tests passing, frontend 100%
 
 ## Test Credentials
 - admin@erp-crm.com / admin123
 
-## Backlog (P1/P2)
-- P1: Connect real SendGrid/Resend API key (currently blueprint only)
-- P1: User invite + role assignment within tenant (currently single admin per org)
-- P2: Pipeline stage management UI (currently seeded defaults)
-- P2: Invoice PDF generation + email send
-- P2: Inventory threshold alerts
-- P2: Audit log per tenant
+## Backlog
+- P2: Split server.py into routers/ modules (auth, crm, erp, payments, users)
+- P2: Move email sending to BackgroundTasks (currently blocks request 100-300ms)
+- P2: Verify a Resend domain to send invites to real users
+- P3: Pipeline stage management UI, invoice PDF export, audit log per tenant
+- P3: Switch cookie secure=True via env var for production
