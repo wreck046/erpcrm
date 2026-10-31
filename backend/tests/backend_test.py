@@ -241,6 +241,25 @@ class TestEmail:
         r2 = admin_session.get(f"{API}/email/campaigns")
         assert any(x["id"] == c["id"] for x in r2.json())
 
+    # NEW: email config status endpoint
+    def test_email_config_requires_auth(self):
+        r = requests.get(f"{API}/email/config")
+        assert r.status_code == 401
+
+    def test_email_config_returns_status(self, admin_session):
+        r = admin_session.get(f"{API}/email/config")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # Schema validation
+        for k in ("enabled", "sender", "is_default_sandbox", "note"):
+            assert k in data, f"missing key {k}"
+        assert isinstance(data["enabled"], bool)
+        assert isinstance(data["sender"], str) and "@" in data["sender"]
+        assert isinstance(data["is_default_sandbox"], bool)
+        assert isinstance(data["note"], str) and len(data["note"]) > 0
+        # Consistency: sandbox flag aligns with sender domain
+        assert data["is_default_sandbox"] == data["sender"].endswith("@resend.dev")
+
 
 # ============== Multi-tenant isolation ==============
 class TestMultiTenant:
